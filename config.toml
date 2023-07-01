@@ -1,0 +1,5 @@
+tun_name = "tun0"
+tun_ip_cidr = "192.168.0.1/24"
+tun_mode = "tun"
+listen = "0.0.0.0:55001"
+mtu = 1400
