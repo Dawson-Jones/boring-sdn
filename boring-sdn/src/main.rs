@@ -1,10 +1,12 @@
-use std::net::SocketAddr;
+use std::time::Duration;
+use std::{net::SocketAddr};
 use std::sync::Arc;
 
 use futures::future;
 use socket2::{Socket, Domain, Type, SockAddr};
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket};
 use tokio_tun::{TunBuilder, Tun};
+use lru_time_cache::LruCache;
 
 // use boring_sdn::client;
 // use boring_sdn::server;
@@ -49,16 +51,30 @@ async fn main() {
             let mut buf_from_remote = [0u8; MAX_PACKET_LEN];
             let udp_srv = new_udp_reuseport(SocketAddr::V4(command.listen));
             log::info!("cpu {}, udp server: {} created", i, command.listen.to_string());
+            // let connections = Arc::new(RwLock::new(HashMap::<SocketAddr, Arc<UdpSocket>>::new()));
+            let udp_ttl = Duration::from_secs(180);
+            let max_count = 180;
+            let mut connections = LruCache::<SocketAddr, UdpSocket>
+                ::with_expiry_duration_and_capacity(udp_ttl, max_count);
 
             loop {
                 tokio::select! {
                     // if let Ok(size) = tun.recv(&mut buf_from_local).await {
                     Ok(size) = tun.recv(&mut buf_from_local) => {
+                        log::info!("tun recv from queue: {}", i);
                         let (buf, remote_addr) = simple_route::route_from_local(&mut buf_from_local[..size]);
 
                         // TODO: restore the UDP socket in somewhere 
                         //  to avoid calling syscall when creating udp_cli
-                        let udp_cli = new_udp_cli(remote_addr);
+                        if !connections.contains_key(&remote_addr) {
+                            log::info!("queue {} not found udp_socket in LRU", i);
+                            let udp_cli = new_udp_cli(remote_addr);
+                            connections.insert(remote_addr, udp_cli);
+                        } else {
+                            log::info!("queue {} found udp_socket in LRU", i);
+                        }
+                        let udp_cli = connections.get(&remote_addr).unwrap();
+
                         match udp_cli.send(buf).await {
                             Ok(size) => {
                                 log::info!("send packet {} to {}", size, remote_addr);
